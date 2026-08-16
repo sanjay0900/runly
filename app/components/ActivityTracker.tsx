@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
 import {
   ArrowLeft,
   MapPin,
@@ -9,7 +15,11 @@ import {
   Square,
 } from "lucide-react";
 
-type ActivityType = "Running" | "Walking" | "Cycling" | "Hiking";
+type ActivityType =
+  | "Running"
+  | "Walking"
+  | "Cycling"
+  | "Hiking";
 
 type Position = {
   latitude: number;
@@ -18,11 +28,48 @@ type Position = {
   timestamp: number;
 };
 
+export type ActivityResult = {
+  activity: ActivityType;
+  distance: number;
+  duration: number;
+  pace: number;
+  calories: number;
+};
+
 type ActivityTrackerProps = {
   activity: ActivityType;
   onBack: () => void;
-  onFinish: () => void;
+  onFinish: (
+    result: ActivityResult
+  ) => void;
 };
+
+/*
+ * Load Leaflet only on the client.
+ *
+ * This prevents Leaflet from being evaluated
+ * during Next.js server rendering.
+ */
+const LiveRouteMap = dynamic(
+  () => import("./LiveRouteMap"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full items-center justify-center bg-[#eef0f2]">
+        <div className="text-center text-gray-400">
+          <MapPin
+            className="mx-auto mb-2"
+            size={30}
+          />
+
+          <p className="text-sm font-medium">
+            Loading map...
+          </p>
+        </div>
+      </div>
+    ),
+  }
+);
 
 function calculateDistance(
   a: Position,
@@ -31,20 +78,32 @@ function calculateDistance(
   const earthRadiusKm = 6371;
 
   const latitudeDifference =
-    ((b.latitude - a.latitude) * Math.PI) / 180;
+    ((b.latitude - a.latitude) *
+      Math.PI) /
+    180;
 
   const longitudeDifference =
-    ((b.longitude - a.longitude) * Math.PI) / 180;
+    ((b.longitude - a.longitude) *
+      Math.PI) /
+    180;
 
   const latitude1 =
-    (a.latitude * Math.PI) / 180;
+    (a.latitude * Math.PI) /
+    180;
 
   const latitude2 =
-    (b.latitude * Math.PI) / 180;
+    (b.latitude * Math.PI) /
+    180;
 
   const haversine =
-    Math.sin(latitudeDifference / 2) ** 2 +
-    Math.sin(longitudeDifference / 2) ** 2 *
+    Math.sin(
+      latitudeDifference / 2
+    ) **
+      2 +
+    Math.sin(
+      longitudeDifference / 2
+    ) **
+      2 *
       Math.cos(latitude1) *
       Math.cos(latitude2);
 
@@ -52,14 +111,21 @@ function calculateDistance(
     2 *
     Math.atan2(
       Math.sqrt(haversine),
-      Math.sqrt(1 - haversine)
+      Math.sqrt(
+        1 - haversine
+      )
     );
 
-  return earthRadiusKm * angularDistance;
+  return (
+    earthRadiusKm *
+    angularDistance
+  );
 }
 
 function formatTime(seconds: number) {
-  const hours = Math.floor(seconds / 3600);
+  const hours = Math.floor(
+    seconds / 3600
+  );
 
   const minutes = Math.floor(
     (seconds % 3600) / 60
@@ -68,40 +134,113 @@ function formatTime(seconds: number) {
   const secs = seconds % 60;
 
   if (hours > 0) {
-    return `${String(hours).padStart(
+    return `${String(
+      hours
+    ).padStart(
       2,
       "0"
-    )}:${String(minutes).padStart(
+    )}:${String(
+      minutes
+    ).padStart(
       2,
       "0"
-    )}:${String(secs).padStart(2, "0")}`;
+    )}:${String(
+      secs
+    ).padStart(
+      2,
+      "0"
+    )}`;
   }
 
-  return `${String(minutes).padStart(
+  return `${String(
+    minutes
+  ).padStart(
     2,
     "0"
-  )}:${String(secs).padStart(2, "0")}`;
+  )}:${String(
+    secs
+  ).padStart(
+    2,
+    "0"
+  )}`;
 }
 
-function formatPace(paceMinutes: number) {
-  if (!Number.isFinite(paceMinutes)) {
+function calculatePace(
+  distance: number,
+  seconds: number
+) {
+  if (
+    distance < 0.1 ||
+    seconds <= 0
+  ) {
+    return 0;
+  }
+
+  return (
+    seconds / 60 / distance
+  );
+}
+
+function formatPace(
+  paceMinutes: number
+) {
+  if (
+    !Number.isFinite(
+      paceMinutes
+    ) ||
+    paceMinutes <= 0
+  ) {
     return "--:--";
   }
 
-  const minutes = Math.floor(paceMinutes);
+  const minutes = Math.floor(
+    paceMinutes
+  );
 
   const seconds = Math.round(
-    (paceMinutes - minutes) * 60
+    (paceMinutes -
+      minutes) *
+      60
   );
 
   if (seconds >= 60) {
     return `${minutes + 1}:00`;
   }
 
-  return `${minutes}:${String(seconds).padStart(
+  return `${minutes}:${String(
+    seconds
+  ).padStart(
     2,
     "0"
   )}`;
+}
+
+function estimateCalories(
+  activity: ActivityType,
+  distance: number,
+  durationSeconds: number
+) {
+  /*
+   * Very rough V1 estimates.
+   *
+   * Later we'll calculate calories using
+   * user weight, pace and activity METs.
+   */
+
+  const hours =
+    durationSeconds / 3600;
+
+  const caloriesPerHour = {
+    Running: 650,
+    Walking: 280,
+    Cycling: 500,
+    Hiking: 450,
+  };
+
+  return Math.round(
+    caloriesPerHour[activity] *
+      hours
+  );
 }
 
 export default function ActivityTracker({
@@ -130,17 +269,19 @@ export default function ActivityTracker({
   const [error, setError] =
     useState("");
 
+  /*
+   * NEW:
+   * Complete GPS route.
+   */
+  const [route, setRoute] =
+    useState<Position[]>([]);
+
   const watchId =
     useRef<number | null>(null);
 
   const lastPosition =
     useRef<Position | null>(null);
 
-  /*
-   * Keep the distance separately in a ref.
-   * This prevents rapid GPS updates from
-   * causing stale state calculations.
-   */
   const distanceRef =
     useRef(0);
 
@@ -148,54 +289,73 @@ export default function ActivityTracker({
    * Timer
    */
   useEffect(() => {
-    if (!isTracking || isPaused) {
+    if (
+      !isTracking ||
+      isPaused
+    ) {
       return;
     }
 
-    const interval = setInterval(() => {
-      setSeconds((current) => current + 1);
-    }, 1000);
+    const interval =
+      setInterval(() => {
+        setSeconds(
+          (current) =>
+            current + 1
+        );
+      }, 1000);
 
     return () => {
       clearInterval(interval);
     };
-  }, [isTracking, isPaused]);
+  }, [
+    isTracking,
+    isPaused,
+  ]);
 
   /*
    * GPS tracking
    */
   useEffect(() => {
-    if (!isTracking || isPaused) {
+    if (
+      !isTracking ||
+      isPaused
+    ) {
       return;
     }
 
-    if (!navigator.geolocation) {
+    if (
+      !navigator.geolocation
+    ) {
       setError(
         "GPS is not supported by this browser."
       );
 
-      setGpsStatus("GPS unavailable");
+      setGpsStatus(
+        "GPS unavailable"
+      );
 
       return;
     }
 
-    setGpsStatus("Searching for GPS...");
+    setGpsStatus(
+      "Searching for GPS..."
+    );
+
     setError("");
 
     watchId.current =
       navigator.geolocation.watchPosition(
         (position) => {
           const accuracy =
-            position.coords.accuracy;
+            position.coords
+              .accuracy;
 
-          setGpsAccuracy(accuracy);
+          setGpsAccuracy(
+            accuracy
+          );
 
           /*
-           * Ignore extremely inaccurate GPS
-           * readings.
-           *
-           * 50m is acceptable for our first
-           * version. Later we'll tune this.
+           * Ignore poor GPS readings.
            */
           if (accuracy > 50) {
             setGpsStatus(
@@ -207,25 +367,39 @@ export default function ActivityTracker({
             return;
           }
 
-          const currentPosition: Position = {
-            latitude:
-              position.coords.latitude,
+          const currentPosition: Position =
+            {
+              latitude:
+                position.coords
+                  .latitude,
 
-            longitude:
-              position.coords.longitude,
+              longitude:
+                position.coords
+                  .longitude,
 
-            accuracy,
+              accuracy,
 
-            timestamp:
-              position.timestamp,
-          };
+              timestamp:
+                position.timestamp,
+            };
 
           /*
-           * First valid GPS reading.
+           * First valid reading.
            */
-          if (!lastPosition.current) {
+          if (
+            !lastPosition.current
+          ) {
             lastPosition.current =
               currentPosition;
+
+            /*
+             * NEW:
+             * Start the route with
+             * the first GPS point.
+             */
+            setRoute([
+              currentPosition,
+            ]);
 
             setGpsStatus(
               `GPS connected · ±${Math.round(
@@ -245,9 +419,6 @@ export default function ActivityTracker({
               currentPosition
             );
 
-          /*
-           * Time between GPS readings.
-           */
           const timeDifference =
             Math.max(
               1,
@@ -257,12 +428,38 @@ export default function ActivityTracker({
             );
 
           /*
-           * Ignore extremely tiny movements.
-           *
-           * GPS can naturally drift by a few
-           * meters while the phone is standing.
+           * Ignore tiny GPS drift.
            */
           if (moved < 0.003) {
+            /*
+             * Even if the person hasn't moved
+             * enough to count distance, update
+             * the current route position.
+             */
+            setRoute(
+              (currentRoute) => {
+                if (
+                  currentRoute.length ===
+                  0
+                ) {
+                  return [
+                    currentPosition,
+                  ];
+                }
+
+                const updated = [
+                  ...currentRoute,
+                ];
+
+                updated[
+                  updated.length - 1
+                ] =
+                  currentPosition;
+
+                return updated;
+              }
+            );
+
             return;
           }
 
@@ -270,10 +467,6 @@ export default function ActivityTracker({
            * Reject impossible GPS jumps.
            *
            * 12 m/s ≈ 43 km/h.
-           *
-           * This is generous enough for our
-           * running/cycling use case while
-           * preventing obvious GPS jumps.
            */
           const speed =
             (moved * 1000) /
@@ -287,10 +480,8 @@ export default function ActivityTracker({
             return;
           }
 
-          /*
-           * Add valid movement.
-           */
-          distanceRef.current += moved;
+          distanceRef.current +=
+            moved;
 
           setDistance(
             distanceRef.current
@@ -298,6 +489,18 @@ export default function ActivityTracker({
 
           lastPosition.current =
             currentPosition;
+
+          /*
+           * NEW:
+           * Add valid GPS point
+           * to route.
+           */
+          setRoute(
+            (currentRoute) => [
+              ...currentRoute,
+              currentPosition,
+            ]
+          );
 
           setGpsStatus(
             `GPS connected · ±${Math.round(
@@ -316,11 +519,15 @@ export default function ActivityTracker({
             setError(
               "Location permission was denied."
             );
-          } else if (err.code === 2) {
+          } else if (
+            err.code === 2
+          ) {
             setError(
               "Unable to determine your location."
             );
-          } else if (err.code === 3) {
+          } else if (
+            err.code === 3
+          ) {
             setError(
               "GPS request timed out."
             );
@@ -337,17 +544,7 @@ export default function ActivityTracker({
 
         {
           enableHighAccuracy: true,
-
-          /*
-           * Don't use an old location for
-           * too long.
-           */
           maximumAge: 2000,
-
-          /*
-           * Give the phone enough time to
-           * establish GPS.
-           */
           timeout: 20000,
         }
       );
@@ -363,7 +560,10 @@ export default function ActivityTracker({
         watchId.current = null;
       }
     };
-  }, [isTracking, isPaused]);
+  }, [
+    isTracking,
+    isPaused,
+  ]);
 
   function startTracking() {
     setError("");
@@ -374,7 +574,14 @@ export default function ActivityTracker({
 
     distanceRef.current = 0;
 
-    lastPosition.current = null;
+    lastPosition.current =
+      null;
+
+    /*
+     * NEW:
+     * Clear previous route.
+     */
+    setRoute([]);
 
     setIsTracking(true);
 
@@ -389,11 +596,11 @@ export default function ActivityTracker({
 
   function resumeTracking() {
     /*
-     * Reset the previous position when
-     * resuming so the app doesn't calculate
-     * a huge jump while paused.
+     * Prevent a large GPS jump
+     * after resuming.
      */
-    lastPosition.current = null;
+    lastPosition.current =
+      null;
 
     setIsPaused(false);
 
@@ -417,18 +624,42 @@ export default function ActivityTracker({
       watchId.current = null;
     }
 
-    onFinish();
+    const pace =
+      calculatePace(
+        distanceRef.current,
+        seconds
+      );
+
+    const calories =
+      estimateCalories(
+        activity,
+        distanceRef.current,
+        seconds
+      );
+
+    const result: ActivityResult =
+      {
+        activity,
+
+        distance:
+          distanceRef.current,
+
+        duration:
+          seconds,
+
+        pace,
+
+        calories,
+      };
+
+    onFinish(result);
   }
 
-  /*
-   * Don't show pace until we have at least
-   * 100 meters of valid movement.
-   */
   const pace =
-    distance >= 0.1 &&
-    seconds > 0
-      ? seconds / 60 / distance
-      : Infinity;
+    calculatePace(
+      distance,
+      seconds
+    );
 
   const paceDisplay =
     formatPace(pace);
@@ -439,6 +670,7 @@ export default function ActivityTracker({
 
         {/* Header */}
         <div className="flex items-center gap-4 pt-8">
+
           <button
             type="button"
             onClick={onBack}
@@ -457,10 +689,12 @@ export default function ActivityTracker({
               {activity}
             </h1>
           </div>
+
         </div>
 
         {/* GPS status */}
         <div className="mt-8 flex items-center gap-2 text-sm">
+
           <MapPin size={17} />
 
           <span
@@ -474,10 +708,11 @@ export default function ActivityTracker({
           >
             {gpsStatus}
           </span>
+
         </div>
 
-        {/* GPS accuracy */}
-        {gpsAccuracy !== null && (
+        {gpsAccuracy !==
+          null && (
           <p className="mt-1 pl-6 text-xs text-gray-400">
             GPS accuracy: ±
             {Math.round(
@@ -494,8 +729,9 @@ export default function ActivityTracker({
           </div>
         )}
 
-        {/* Tracking stats */}
+        {/* Stats */}
         <section className="mt-6 rounded-[32px] bg-black p-6 text-white">
+
           <p className="text-sm text-gray-400">
             {isPaused
               ? "Activity paused"
@@ -510,21 +746,26 @@ export default function ActivityTracker({
 
             {/* Distance */}
             <div className="rounded-2xl bg-white/10 p-4">
+
               <p className="text-xs text-gray-400">
                 Distance
               </p>
 
               <p className="mt-1 text-2xl font-bold">
-                {distance.toFixed(2)}
+                {distance.toFixed(
+                  2
+                )}
               </p>
 
               <p className="text-xs text-gray-400">
                 km
               </p>
+
             </div>
 
             {/* Pace */}
             <div className="rounded-2xl bg-white/10 p-4">
+
               <p className="text-xs text-gray-400">
                 Current pace
               </p>
@@ -536,33 +777,28 @@ export default function ActivityTracker({
               <p className="text-xs text-gray-400">
                 min/km
               </p>
+
             </div>
+
           </div>
         </section>
 
-        {/* Map placeholder */}
-        <section className="mt-4 flex h-56 items-center justify-center overflow-hidden rounded-[32px] bg-[#eef0f2]">
-          <div className="text-center text-gray-400">
-            <MapPin
-              className="mx-auto mb-2"
-              size={30}
-            />
+        {/* LIVE ROUTE MAP */}
+        <section className="mt-4 h-56 overflow-hidden rounded-[32px]">
 
-            <p className="text-sm font-medium">
-              Live route map
-            </p>
+          <LiveRouteMap
+            route={route}
+          />
 
-            <p className="mt-1 text-xs">
-              Map coming next
-            </p>
-          </div>
         </section>
 
         {/* Controls */}
         {!isTracking ? (
           <button
             type="button"
-            onClick={startTracking}
+            onClick={
+              startTracking
+            }
             className="mt-6 flex w-full touch-manipulation items-center justify-center gap-3 rounded-3xl bg-[#c7ff3d] px-6 py-5 font-bold transition active:scale-[0.98]"
           >
             <Play
@@ -606,7 +842,9 @@ export default function ActivityTracker({
             {/* Finish */}
             <button
               type="button"
-              onClick={finishTracking}
+              onClick={
+                finishTracking
+              }
               className="flex items-center justify-center gap-2 rounded-3xl bg-red-50 px-5 py-5 font-bold text-red-600 transition active:scale-[0.98]"
             >
               <Square
@@ -616,10 +854,12 @@ export default function ActivityTracker({
 
               Finish
             </button>
+
           </div>
         )}
 
         <div className="h-6" />
+
       </div>
     </main>
   );
