@@ -34,6 +34,7 @@ export type ActivityResult = {
   duration: number;
   pace: number;
   calories: number;
+  route: Position[];
 };
 
 type ActivityTrackerProps = {
@@ -650,6 +651,8 @@ export default function ActivityTracker({
         pace,
 
         calories,
+
+        route: [...route],
       };
 
     onFinish(result);

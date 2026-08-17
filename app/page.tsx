@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   Activity,
   ArrowRight,
@@ -39,6 +40,23 @@ type SavedActivity = ActivityResult & {
 };
 
 const STORAGE_KEY = "runly_activities";
+
+const LiveRouteMap = dynamic(
+  () => import("./components/LiveRouteMap"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full items-center justify-center bg-[#eef0f2]">
+        <div className="text-center text-gray-400">
+          <MapPin className="mx-auto mb-2" size={30} />
+          <p className="text-sm font-medium">
+            Loading map...
+          </p>
+        </div>
+      </div>
+    ),
+  }
+);
 
 export default function HomePage() {
   const [screen, setScreen] =
@@ -805,26 +823,11 @@ function ActivitySummary({
 
         </section>
 
-        {/* Map placeholder */}
-        <section className="mt-4 flex h-40 items-center justify-center rounded-[32px] bg-[#eef0f2]">
-
-          <div className="text-center text-gray-400">
-
-            <MapPin
-              className="mx-auto mb-2"
-              size={28}
-            />
-
-            <p className="text-sm font-medium">
-              Your route
-            </p>
-
-            <p className="mt-1 text-xs">
-              Route map coming next
-            </p>
-
-          </div>
-
+        {/* Completed route map */}
+        <section className="mt-4 h-56 overflow-hidden rounded-[32px]">
+          <LiveRouteMap
+            route={result.route ?? []}
+          />
         </section>
 
         {/* Done */}
