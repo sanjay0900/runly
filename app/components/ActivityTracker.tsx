@@ -338,9 +338,16 @@ export default function ActivityTracker({
   /*
    * Experimental browser step counter.
    *
-   * Uses DeviceMotionEvent acceleration data.
-   * This is intentionally a V1 estimate, not a
-   * native health-platform step counter.
+   * V2 goals:
+   * - Work better when the phone is in a pocket.
+   * - Be less dependent on phone orientation.
+   * - Detect normal walking/running cadence without
+   *   counting every small hand movement as a step.
+   * - Keep working when the screen is off as long as
+   *   the browser continues delivering motion events.
+   *
+   * This is still a browser estimate, not a native
+   * health-platform step counter.
    */
   useEffect(() => {
     if (
@@ -361,8 +368,8 @@ export default function ActivityTracker({
           };
 
         if (
-          !MotionEvent ||
-          typeof window === "undefined"
+          typeof window === "undefined" ||
+          !MotionEvent
         ) {
           setStepStatus(
             "Step sensor unavailable"
@@ -372,7 +379,7 @@ export default function ActivityTracker({
 
         /*
          * Some browsers, notably iOS Safari,
-         * require a user-granted motion permission.
+         * require an explicit motion permission.
          */
         if (
           typeof MotionEvent.requestPermission ===
@@ -395,6 +402,22 @@ export default function ActivityTracker({
           return;
         }
 
+        /*
+         * Step detector state.
+         *
+         * We calculate total acceleration magnitude so
+         * the phone can be rotated freely. Gravity is
+         * removed with a slow low-pass filter. We then
+         * smooth the remaining signal and look for a
+         * positive peak followed by a valley.
+         */
+        let gravityMagnitude: number | null = null;
+        let previousSignal = 0;
+        let previousPreviousSignal = 0;
+        let lastPeakValue = 0;
+        let lastPeakTime = 0;
+        let motionSamples = 0;
+
         const handleMotion = (
           event: DeviceMotionEvent
         ) => {
@@ -402,12 +425,9 @@ export default function ActivityTracker({
             event.acceleration ??
             event.accelerationIncludingGravity;
 
-          const x =
-            acceleration?.x;
-          const y =
-            acceleration?.y;
-          const z =
-            acceleration?.z;
+          const x = acceleration?.x;
+          const y = acceleration?.y;
+          const z = acceleration?.z;
 
           if (
             !Number.isFinite(x) ||
@@ -424,56 +444,113 @@ export default function ActivityTracker({
               z! * z!
             );
 
-          if (
-            lastMotionMagnitude.current ===
-            null
-          ) {
-            lastMotionMagnitude.current =
-              magnitude;
-
-            filteredMotionMagnitude.current =
-              magnitude;
-
+          /*
+           * Learn the gravity component gradually.
+           * This makes the signal much less sensitive
+           * to whether the phone is upright, flat or
+           * sitting inside a pocket.
+           */
+          if (gravityMagnitude === null) {
+            gravityMagnitude = magnitude;
             return;
           }
 
-          const previousFiltered =
-            filteredMotionMagnitude.current ??
-            magnitude;
+          gravityMagnitude +=
+            0.02 *
+              (magnitude -
+                gravityMagnitude);
+
+          const dynamicAcceleration =
+            magnitude -
+            gravityMagnitude;
 
           /*
-           * Low-pass filter + high-pass signal
-           * makes detection less dependent on
-           * how the phone is oriented.
+           * Smooth high-frequency sensor noise while
+           * keeping the walking rhythm.
            */
-          const filtered =
-            previousFiltered +
-            0.1 *
-              (magnitude -
-                previousFiltered);
-
           const signal =
-            magnitude -
-            filtered;
+            previousSignal +
+            0.25 *
+              (dynamicAcceleration -
+                previousSignal);
 
-          const previousSignal =
-            lastMotionSignal.current;
+          motionSamples += 1;
+
+          /*
+           * Ignore the first short warm-up period while
+           * the gravity estimate stabilizes.
+           */
+          if (motionSamples < 15) {
+            previousPreviousSignal =
+              previousSignal;
+            previousSignal = signal;
+            return;
+          }
 
           const now =
             performance.now();
 
           /*
-           * Basic walking/running peak detector.
+           * Adaptive threshold:
            *
-           * 1.1 m/s² is deliberately conservative
-           * for the first version.
+           * Pocket walking can produce smaller peaks than
+           * hand-held walking. A 0.45 m/s² floor is enough
+           * to catch those peaks, while the adaptive part
+           * rises when the phone is moving more strongly.
+           */
+          const adaptiveThreshold =
+            Math.max(
+              0.45,
+              Math.min(1.1,
+                Math.abs(signal) *
+                  0.55 +
+                  0.25)
+            );
+
+          /*
+           * Detect a local positive peak. The following
+           * valley confirmation prevents a single sharp
+           * hand movement from immediately becoming a step.
+           */
+          const isPositivePeak =
+            previousSignal >
+              previousPreviousSignal &&
+            previousSignal >= signal &&
+            previousSignal >
+              adaptiveThreshold;
+
+          if (isPositivePeak) {
+            lastPeakValue =
+              previousSignal;
+          }
+
+          const hasPeak =
+            lastPeakValue >
+            adaptiveThreshold;
+
+          const valleyAfterPeak =
+            hasPeak &&
+            signal <
+              previousSignal &&
+            signal <
+              lastPeakValue *
+                0.35;
+
+          const elapsed =
+            now - lastStepTimestamp.current;
+
+          /*
+           * A human walking/running cadence normally
+           * stays between roughly 300ms and 1.2s per step.
+           * This blocks rapid sensor spikes and also avoids
+           * counting the same peak repeatedly.
            */
           if (
-            signal > 1.1 &&
-            previousSignal <= 1.1 &&
-            now -
-              lastStepTimestamp.current >
-              300
+            valleyAfterPeak &&
+            elapsed > 300 &&
+            (lastStepTimestamp.current === 0 ||
+              elapsed < 1800) &&
+            now - lastPeakTime > 300
           ) {
             stepsRef.current += 1;
 
@@ -483,16 +560,25 @@ export default function ActivityTracker({
 
             lastStepTimestamp.current =
               now;
+
+            lastPeakTime = now;
+            lastPeakValue = 0;
           }
 
-          lastMotionMagnitude.current =
-            magnitude;
+          /*
+           * If a very long time has passed without a
+           * confirmed step, forget the old peak.
+           */
+          if (
+            lastPeakValue > 0 &&
+            now - lastPeakTime > 1800
+          ) {
+            lastPeakValue = 0;
+          }
 
-          filteredMotionMagnitude.current =
-            filtered;
-
-          lastMotionSignal.current =
-            signal;
+          previousPreviousSignal =
+            previousSignal;
+          previousSignal = signal;
         };
 
         window.addEventListener(
@@ -504,10 +590,6 @@ export default function ActivityTracker({
           "Motion sensor connected"
         );
 
-        /*
-         * Keep the cleanup function attached
-         * to the current effect invocation.
-         */
         return () => {
           window.removeEventListener(
             "devicemotion",
