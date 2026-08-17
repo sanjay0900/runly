@@ -842,9 +842,11 @@ function ActivitySummary({
           />
 
           <SummaryStat
-            label="Activity"
+            label="Steps"
             value={
-              result.activity
+              typeof result.steps === "number"
+                ? result.steps.toLocaleString()
+                : "—"
             }
           />
 
@@ -1117,7 +1119,7 @@ function HistoryCard({
 
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-2">
+      <div className="mt-4 grid grid-cols-2 gap-2">
 
         <div className="rounded-2xl bg-[#f4f5f7] p-3">
           <p className="text-[11px] text-gray-500">
@@ -1156,6 +1158,18 @@ function HistoryCard({
                   activity.pace
                 )}/km`
               : "--"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl bg-[#f4f5f7] p-3">
+          <p className="text-[11px] text-gray-500">
+            Steps
+          </p>
+
+          <p className="mt-1 text-sm font-bold">
+            {typeof activity.steps === "number"
+              ? activity.steps.toLocaleString()
+              : "—"}
           </p>
         </div>
 
@@ -1272,8 +1286,12 @@ function ActivityDetail({
             />
 
             <SummaryStat
-              label="Activity"
-              value={activity.activity}
+              label="Steps"
+              value={
+                typeof activity.steps === "number"
+                  ? activity.steps.toLocaleString()
+                  : "—"
+              }
             />
           </section>
 

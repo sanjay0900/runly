@@ -34,6 +34,7 @@ export type ActivityResult = {
   duration: number;
   pace: number;
   calories: number;
+  steps: number;
   route: Position[];
 };
 
@@ -277,6 +278,12 @@ export default function ActivityTracker({
   const [route, setRoute] =
     useState<Position[]>([]);
 
+  const [steps, setSteps] =
+    useState(0);
+
+  const [stepStatus, setStepStatus] =
+    useState("Step sensor ready");
+
   const watchId =
     useRef<number | null>(null);
 
@@ -284,6 +291,21 @@ export default function ActivityTracker({
     useRef<Position | null>(null);
 
   const distanceRef =
+    useRef(0);
+
+  const stepsRef =
+    useRef(0);
+
+  const lastMotionMagnitude =
+    useRef<number | null>(null);
+
+  const filteredMotionMagnitude =
+    useRef<number | null>(null);
+
+  const lastMotionSignal =
+    useRef(0);
+
+  const lastStepTimestamp =
     useRef(0);
 
   /*
@@ -311,6 +333,220 @@ export default function ActivityTracker({
   }, [
     isTracking,
     isPaused,
+  ]);
+
+  /*
+   * Experimental browser step counter.
+   *
+   * Uses DeviceMotionEvent acceleration data.
+   * This is intentionally a V1 estimate, not a
+   * native health-platform step counter.
+   */
+  useEffect(() => {
+    if (
+      !isTracking ||
+      isPaused ||
+      activity === "Cycling"
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function startMotionTracking() {
+      try {
+        const MotionEvent =
+          window.DeviceMotionEvent as typeof DeviceMotionEvent & {
+            requestPermission?: () => Promise<string>;
+          };
+
+        if (
+          !MotionEvent ||
+          typeof window === "undefined"
+        ) {
+          setStepStatus(
+            "Step sensor unavailable"
+          );
+          return;
+        }
+
+        /*
+         * Some browsers, notably iOS Safari,
+         * require a user-granted motion permission.
+         */
+        if (
+          typeof MotionEvent.requestPermission ===
+          "function"
+        ) {
+          const permission =
+            await MotionEvent.requestPermission();
+
+          if (
+            permission !== "granted"
+          ) {
+            setStepStatus(
+              "Step permission denied"
+            );
+            return;
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const handleMotion = (
+          event: DeviceMotionEvent
+        ) => {
+          const acceleration =
+            event.acceleration ??
+            event.accelerationIncludingGravity;
+
+          const x =
+            acceleration?.x;
+          const y =
+            acceleration?.y;
+          const z =
+            acceleration?.z;
+
+          if (
+            !Number.isFinite(x) ||
+            !Number.isFinite(y) ||
+            !Number.isFinite(z)
+          ) {
+            return;
+          }
+
+          const magnitude =
+            Math.sqrt(
+              x! * x! +
+              y! * y! +
+              z! * z!
+            );
+
+          if (
+            lastMotionMagnitude.current ===
+            null
+          ) {
+            lastMotionMagnitude.current =
+              magnitude;
+
+            filteredMotionMagnitude.current =
+              magnitude;
+
+            return;
+          }
+
+          const previousFiltered =
+            filteredMotionMagnitude.current ??
+            magnitude;
+
+          /*
+           * Low-pass filter + high-pass signal
+           * makes detection less dependent on
+           * how the phone is oriented.
+           */
+          const filtered =
+            previousFiltered +
+            0.1 *
+              (magnitude -
+                previousFiltered);
+
+          const signal =
+            magnitude -
+            filtered;
+
+          const previousSignal =
+            lastMotionSignal.current;
+
+          const now =
+            performance.now();
+
+          /*
+           * Basic walking/running peak detector.
+           *
+           * 1.1 m/s² is deliberately conservative
+           * for the first version.
+           */
+          if (
+            signal > 1.1 &&
+            previousSignal <= 1.1 &&
+            now -
+              lastStepTimestamp.current >
+              300
+          ) {
+            stepsRef.current += 1;
+
+            setSteps(
+              stepsRef.current
+            );
+
+            lastStepTimestamp.current =
+              now;
+          }
+
+          lastMotionMagnitude.current =
+            magnitude;
+
+          filteredMotionMagnitude.current =
+            filtered;
+
+          lastMotionSignal.current =
+            signal;
+        };
+
+        window.addEventListener(
+          "devicemotion",
+          handleMotion
+        );
+
+        setStepStatus(
+          "Motion sensor connected"
+        );
+
+        /*
+         * Keep the cleanup function attached
+         * to the current effect invocation.
+         */
+        return () => {
+          window.removeEventListener(
+            "devicemotion",
+            handleMotion
+          );
+        };
+      } catch (motionError) {
+        console.error(
+          "Motion sensor error:",
+          motionError
+        );
+
+        setStepStatus(
+          "Step sensor unavailable"
+        );
+      }
+    }
+
+    let cleanup:
+      | (() => void)
+      | undefined;
+
+    startMotionTracking().then(
+      (result) => {
+        cleanup = result;
+      }
+    );
+
+    return () => {
+      cancelled = true;
+
+      if (cleanup) {
+        cleanup();
+      }
+    };
+  }, [
+    isTracking,
+    isPaused,
+    activity,
   ]);
 
   /*
@@ -579,10 +815,30 @@ export default function ActivityTracker({
       null;
 
     /*
-     * NEW:
-     * Clear previous route.
+     * Clear previous route and step count.
      */
     setRoute([]);
+
+    stepsRef.current = 0;
+    setSteps(0);
+
+    lastMotionMagnitude.current =
+      null;
+
+    filteredMotionMagnitude.current =
+      null;
+
+    lastMotionSignal.current =
+      0;
+
+    lastStepTimestamp.current =
+      0;
+
+    setStepStatus(
+      activity === "Cycling"
+        ? "Steps not tracked for cycling"
+        : "Step sensor ready"
+    );
 
     setIsTracking(true);
 
@@ -602,6 +858,15 @@ export default function ActivityTracker({
      */
     lastPosition.current =
       null;
+
+    lastMotionMagnitude.current =
+      null;
+
+    filteredMotionMagnitude.current =
+      null;
+
+    lastMotionSignal.current =
+      0;
 
     setIsPaused(false);
 
@@ -651,6 +916,8 @@ export default function ActivityTracker({
         pace,
 
         calories,
+
+        steps: stepsRef.current,
 
         route: [...route],
       };
@@ -745,10 +1012,10 @@ export default function ActivityTracker({
             {formatTime(seconds)}
           </p>
 
-          <div className="mt-8 grid grid-cols-2 gap-3">
+          <div className="mt-8 grid grid-cols-3 gap-2">
 
             {/* Distance */}
-            <div className="rounded-2xl bg-white/10 p-4">
+            <div className="rounded-2xl bg-white/10 p-3">
 
               <p className="text-xs text-gray-400">
                 Distance
@@ -767,7 +1034,7 @@ export default function ActivityTracker({
             </div>
 
             {/* Pace */}
-            <div className="rounded-2xl bg-white/10 p-4">
+            <div className="rounded-2xl bg-white/10 p-3">
 
               <p className="text-xs text-gray-400">
                 Current pace
@@ -781,6 +1048,23 @@ export default function ActivityTracker({
                 min/km
               </p>
 
+            </div>
+
+            {/* Steps */}
+            <div className="rounded-2xl bg-white/10 p-3">
+              <p className="text-xs text-gray-400">
+                Steps
+              </p>
+
+              <p className="mt-1 text-2xl font-bold">
+                {steps.toLocaleString()}
+              </p>
+
+              <p className="text-[10px] text-gray-400">
+                {stepStatus === "Motion sensor connected"
+                  ? "motion"
+                  : "beta"}
+              </p>
             </div>
 
           </div>
