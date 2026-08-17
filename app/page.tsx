@@ -32,7 +32,8 @@ type Screen =
   | "select"
   | "tracker"
   | "summary"
-  | "history";
+  | "history"
+  | "detail";
 
 type SavedActivity = ActivityResult & {
   id: string;
@@ -67,6 +68,9 @@ export default function HomePage() {
 
   const [completedActivity, setCompletedActivity] =
     useState<ActivityResult | null>(null);
+
+  const [selectedHistoryActivity, setSelectedHistoryActivity] =
+    useState<SavedActivity | null>(null);
 
   const [activities, setActivities] =
     useState<SavedActivity[]>([]);
@@ -263,6 +267,23 @@ export default function HomePage() {
   }
 
   /*
+   * Saved activity details
+   */
+  if (
+    screen === "detail" &&
+    selectedHistoryActivity
+  ) {
+    return (
+      <ActivityDetail
+        activity={selectedHistoryActivity}
+        onBack={() =>
+          setScreen("history")
+        }
+      />
+    );
+  }
+
+  /*
    * History
    */
   if (screen === "history") {
@@ -278,6 +299,12 @@ export default function HomePage() {
         onClear={
           clearHistory
         }
+        onOpen={(activity) => {
+          setSelectedHistoryActivity(
+            activity
+          );
+          setScreen("detail");
+        }}
       />
     );
   }
@@ -855,6 +882,7 @@ function HistoryScreen({
   onBack,
   onDelete,
   onClear,
+  onOpen,
 }: {
   activities: SavedActivity[];
   onBack: () => void;
@@ -862,6 +890,9 @@ function HistoryScreen({
     id: string
   ) => void;
   onClear: () => void;
+  onOpen: (
+    activity: SavedActivity
+  ) => void;
 }) {
   return (
     <main className="min-h-screen bg-[#f4f5f7] text-[#111318]">
@@ -986,6 +1017,9 @@ function HistoryScreen({
                       activity.id
                     )
                   }
+                  onOpen={() =>
+                    onOpen(activity)
+                  }
                 />
               )
             )
@@ -1005,9 +1039,11 @@ function HistoryScreen({
 function HistoryCard({
   activity,
   onDelete,
+  onOpen,
 }: {
   activity: SavedActivity;
   onDelete: () => void;
+  onOpen: () => void;
 }) {
   const date =
     new Date(
@@ -1025,7 +1061,21 @@ function HistoryCard({
     );
 
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (
+          event.key === "Enter" ||
+          event.key === " "
+        ) {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className="block w-full cursor-pointer rounded-3xl border border-gray-100 bg-white p-4 text-left shadow-sm transition active:scale-[0.99]"
+    >
 
       <div className="flex items-center justify-between">
 
@@ -1055,7 +1105,10 @@ function HistoryCard({
 
         <button
           type="button"
-          onClick={onDelete}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
           className="flex h-9 w-9 items-center justify-center rounded-full text-gray-400 transition hover:bg-red-50 hover:text-red-500"
           aria-label="Delete activity"
         >
@@ -1113,8 +1166,134 @@ function HistoryCard({
 }
 
 /* =====================================================
+   ACTIVITY DETAIL
+==================================================== */
+
+function ActivityDetail({
+  activity,
+  onBack,
+}: {
+  activity: SavedActivity;
+  onBack: () => void;
+}) {
+  const date = new Date(activity.date);
+
+  const dateText = date.toLocaleDateString(
+    undefined,
+    {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }
+  );
+
+  const timeText = date.toLocaleTimeString(
+    undefined,
+    {
+      hour: "numeric",
+      minute: "2-digit",
+    }
+  );
+
+  const paceDisplay =
+    activity.pace > 0
+      ? `${formatPace(activity.pace)}/km`
+      : "--";
+
+  return (
+    <main className="min-h-screen bg-[#f4f5f7] text-[#111318]">
+      <div className="mx-auto min-h-screen max-w-md bg-white shadow-xl">
+
+        <header className="flex items-center gap-4 px-6 pb-4 pt-8">
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f4f5f7]"
+            aria-label="Back to history"
+          >
+            <span className="text-xl">←</span>
+          </button>
+
+          <div>
+            <p className="text-sm text-gray-500">
+              RUNLY
+            </p>
+            <h1 className="text-xl font-bold">
+              {activity.activity}
+            </h1>
+          </div>
+        </header>
+
+        <div className="px-6 pb-10">
+
+          <div className="mt-2">
+            <p className="text-sm text-gray-500">
+              {dateText} · {timeText}
+            </p>
+          </div>
+
+          {/* Route */}
+          <section className="mt-5 h-72 overflow-hidden rounded-[32px]">
+            <LiveRouteMap
+              route={activity.route ?? []}
+            />
+          </section>
+
+          {/* Distance */}
+          <section className="mt-4 rounded-[32px] bg-black p-7 text-center text-white">
+            <p className="text-sm text-gray-400">
+              Distance
+            </p>
+
+            <p className="mt-2 text-6xl font-bold tracking-tight">
+              {activity.distance.toFixed(2)}
+            </p>
+
+            <p className="mt-1 text-sm text-gray-400">
+              kilometers
+            </p>
+          </section>
+
+          {/* Stats */}
+          <section className="mt-4 grid grid-cols-2 gap-3">
+            <SummaryStat
+              label="Duration"
+              value={formatDuration(activity.duration)}
+            />
+
+            <SummaryStat
+              label="Average pace"
+              value={paceDisplay}
+            />
+
+            <SummaryStat
+              label="Calories"
+              value={`${activity.calories} kcal`}
+            />
+
+            <SummaryStat
+              label="Activity"
+              value={activity.activity}
+            />
+          </section>
+
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 flex w-full items-center justify-center rounded-3xl bg-[#c7ff3d] px-6 py-5 font-bold transition active:scale-[0.98]"
+          >
+            Back to history
+          </button>
+
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/* =====================================================
    ACTIVITY CARD
-===================================================== */
+==================================================== */
 
 function ActivityCard({
   activity,
